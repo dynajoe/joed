@@ -18,15 +18,14 @@ Handle<Value> WriteToResponse(const Arguments& args)
    return Undefined();
 }
 
+void OnClose(uv_handle_t* handle)
+{
+   puts("Closed");
+}
 
 uv_buf_t AllocConnection(uv_handle_t* handle, size_t suggested_size)
 {
    return uv_buf_init((char*) malloc(suggested_size), suggested_size);
-}
-
-void OnClose(uv_handle_t* handle)
-{
-   puts("Closed");
 }
 
 void OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
@@ -42,29 +41,20 @@ void OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
  
    Local<Object> responseObj = response->NewInstance();
    
-   callback->Call(context->Global(), 1, (Local<Value>*) &responseObj);
+   Local<Value> result = callback->Call(context->Global(), 1, (Local<Value>*) &responseObj);
+   
+   free(buf.base);
    
    uv_close((uv_handle_t*) server, OnClose);
-
-   free(buf.base);
 }
 
 void OnConnection(uv_stream_t* server, int status)
 {
    uv_tcp_t* stream = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
-
-   int r = uv_tcp_init(uv_default_loop(), stream);
-
-   if (r)
-   {
-
-   }
-
+   uv_tcp_init(uv_default_loop(), stream);
    stream->data = server->data;
-
-   r = uv_accept(server, (uv_stream_t*) stream);
-
-   r = uv_read_start((uv_stream_t*) stream, AllocConnection, OnRead);
+   uv_accept(server, (uv_stream_t*) stream);
+   uv_read_start((uv_stream_t*) stream, AllocConnection, OnRead);
 }
 
 Handle<Value> InitializeHttpResponder(const Arguments& args) 
@@ -75,18 +65,17 @@ Handle<Value> InitializeHttpResponder(const Arguments& args)
    }   
 
    uv_tcp_t* server = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
-
    uv_tcp_init(uv_default_loop(), server);
-
-   Local<Function> callback = Local<Function>::Cast(args[0]);
-
+   
+   Local<Function> callback = Local<Function>::Cast(args[2]);
    Persistent<Function> pCallback = Persistent<Function>::New(callback);
-
    server->data = &pCallback;
 
-   int r = uv_tcp_bind(server, uv_ip4_addr("0.0.0.0", 5000));
+   String::AsciiValue ip_address(args[0]);
+   int port = args[1]->Int32Value();
 
-   r = uv_listen((uv_stream_t*) server, 128, OnConnection);
+   uv_tcp_bind(server, uv_ip4_addr(*ip_address, port));
+   uv_listen((uv_stream_t*) server, 128, OnConnection);
 
    return Undefined();
 }
