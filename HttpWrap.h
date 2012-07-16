@@ -12,7 +12,9 @@ class HttpWrap
    
    public: 
       Persistent<Object> server;
-      HttpWrap(const Arguments& args);
+      Persistent<Function> callback;
+      HttpWrap(Handle<Context> context, const Arguments& args);
+      ~HttpWrap();
 
    private: 
       static Handle<Value> Listen(const Arguments& args); 

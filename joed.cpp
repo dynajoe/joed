@@ -8,12 +8,21 @@ using namespace v8;
 
 static Persistent<Context> context;
 
-Handle<Value> CreateServer(const Arguments& args) 
+Handle<Value> Log(const Arguments& args)
 {
    HandleScope scope;
 
-   HttpWrap* httpWrap = new HttpWrap(args);
+   String::Utf8Value value(args[0]);
+   fprintf(stdout, "%s", *value);  
+   
+   return Undefined();
+}
 
+Handle<Value> CreateServer(const Arguments& args) 
+{
+   HandleScope scope;
+   HttpWrap* httpWrap = new HttpWrap(context, args);
+ 
    return scope.Close(httpWrap->server);
 }
 
@@ -23,7 +32,6 @@ Handle<String> ReadFile(const std::string& fileName)
    
    if (file == NULL) return Handle<String>();
 
-   //Get file length
    fseek(file, 0, SEEK_END);
    int size = ftell(file);
    rewind(file);
@@ -45,40 +53,42 @@ Handle<String> ReadFile(const std::string& fileName)
    return result;
 }
 
-void SetupGlobal(int argc, char* argv[]) 
+Handle<ObjectTemplate> GetGlobalObject()
 {
-   HandleScope handle_scope;
-
-   Handle<ObjectTemplate> global = ObjectTemplate::New();
    Handle<ObjectTemplate> httpObject = ObjectTemplate::New();
-   
    httpObject->Set(String::New("createServer"), FunctionTemplate::New(CreateServer));
+   
+   Handle<ObjectTemplate> global = ObjectTemplate::New();
    global->Set(String::New("http"), httpObject);
+   global->Set(String::New("log"), FunctionTemplate::New(Log));
+
+   return global;
+}
+
+void RunScript(const char* fileName)
+{
+   Handle<String> source = ReadFile(fileName);
+
+   Handle<Script> compiledScript = Script::Compile(source);
+
+   compiledScript->Run();
+}
+
+int main(int argc, char* argv[]) 
+{		
+   HandleScope scope;
+
+   Handle<ObjectTemplate> global = GetGlobalObject();
 
    context = Context::New(NULL, global);
 
    Context::Scope context_scope(context);
    
-   Handle<String> source = ReadFile(argv[1]);
-   Handle<Script> script = Script::Compile(source);
-   script->Run();
-   
-   context.Dispose();
-}
-
-int main(int argc, char* argv[]) 
-{		
-	if (argc != 2) 
-   {
-      puts("Specify a file to load");
-      return -1;
-   }
-
-   SetupGlobal(argc, argv);
+   RunScript(argv[1]);
 
    uv_run(uv_default_loop());
-   
-   puts("shutting down");
+
+   context.Dispose();
 
    return 0;
 }

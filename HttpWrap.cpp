@@ -5,7 +5,14 @@
 
 using namespace v8;
 
-HttpWrap::HttpWrap(const Arguments& args)
+#define RESPONSE \
+  "HTTP/1.1 200 OK\r\n" \
+  "Content-Type: text/plain\r\n" \
+  "Content-Length: 12\r\n" \
+  "\r\n" \
+  "hello world\n"
+
+HttpWrap::HttpWrap(Handle<Context> context, const Arguments& args)
 {
    Local<ObjectTemplate> serverTemplate = ObjectTemplate::New();
    serverTemplate->SetInternalFieldCount(1);
@@ -18,22 +25,28 @@ HttpWrap::HttpWrap(const Arguments& args)
    int port = args[1]->Int32Value();
 
    handle = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
-   uv_tcp_init(uv_default_loop(), handle);
    handle->data = this;
+
+   uv_tcp_init(uv_default_loop(), handle);
    uv_tcp_bind(handle, uv_ip4_addr(*ip_address, port));
    
    server = Persistent<Object>::New(localServer);
 }
 
+HttpWrap::~HttpWrap()
+{
+   free(handle);
+}
+
 Handle<Value> HttpWrap::Listen(const Arguments& args)
 {
-   puts("HttpWrap::Listen");
-
    HandleScope scope;
    
    Local<External> wrap = Local<External>::Cast(args.Holder()->GetInternalField(0));
    HttpWrap* httpWrap = static_cast<HttpWrap*>(wrap->Value());
-   httpWrap->server->Set(String::New("onrequest"), args[0]);
+   Local<Function> cb = Local<Function>::Cast(args[0]);
+   httpWrap->callback = Persistent<Function>::New(cb);
+   
    uv_listen((uv_stream_t*) httpWrap->handle, 128, OnConnection);
 
    return scope.Close(Undefined());
@@ -41,7 +54,6 @@ Handle<Value> HttpWrap::Listen(const Arguments& args)
 
 void HttpWrap::OnConnection(uv_stream_t* handle, int status)
 {
-   puts("HttpWrap::OnConnection");
    uv_tcp_t* client = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
    uv_tcp_init(uv_default_loop(), client);
    client->data = handle->data;
@@ -51,39 +63,30 @@ void HttpWrap::OnConnection(uv_stream_t* handle, int status)
 
 uv_buf_t HttpWrap::AllocConnection(uv_handle_t* handle, size_t suggested_size)
 {
-   puts("HttpWrap::AllocConnection");
    return uv_buf_init((char*) malloc(suggested_size), suggested_size);
 }
 
 void HttpWrap::OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
 {
    HandleScope scope;
-   puts("HttpWrap::OnRead");
 
    HttpWrap* httpWrap = static_cast<HttpWrap*>(server->data);
-   Local<String> callbackSym = String::New("onrequest");
-   Local<Value> value = httpWrap->server->Get(callbackSym);
-
-   if (!value->IsFunction())
-   {
-      puts("Value is not a function");
-   }
-   else 
-   {
-      puts("Value is a function");
-      Local<Function> callback = Local<Function>::Cast(value);
-      Local<Value>* argv = new Local<Value>[1];
-      argv[0] = String::New("test");
-      puts("Invoking callback");
-      callback->Call(Context::GetCurrent()->Global(), 1, argv);
-      puts("invoked callback");
-   }
+   Local<Value>* argv = new Local<Value>[1];
+   argv[0] = String::New(buf.base);
    
+   Local<Value> response = httpWrap->callback->Call(Context::GetCurrent()->Global(), 1, argv);
+   
+   uv_buf_t resbuf;
+   resbuf.base = RESPONSE;
+   resbuf.len = sizeof(RESPONSE);
+   uv_write_t writeType;
+
+   uv_write(&writeType, server, &resbuf, 1, 0);
+
    free(buf.base);
-   uv_close((uv_handle_t*) server, OnClose);
 }
 
 void HttpWrap::OnClose(uv_handle_t* handle)
 {
-   puts("HttpWrap::OnClose");
+
 }  
