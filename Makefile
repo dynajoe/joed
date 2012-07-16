@@ -2,7 +2,7 @@ CC=g++
 CFLAG=-c -g -Wall
 
 joedmake: joed.cpp v8/v8.o libuv/uv.a 
-	$(CC) joed.cpp -lz -o joed -Iv8/include libuv/uv.a v8/out/x64.release/libv8_{base,snapshot}.a -lpthread -framework CoreServices $(CFLAGS)
+	$(CC) joed.cpp HttpWrap.h HttpWrap.cpp -lz -o joed -Iv8/include libuv/uv.a v8/out/x64.release/libv8_{base,snapshot}.a -lpthread -framework CoreServices $(CFLAGS)
 
 libuv/uv.a:
 	make -C libuv

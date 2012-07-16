@@ -1,5 +1,7 @@
-http.respond("127.0.0.1", 5000, function(req) {
-   req.respond("Hello world!");
+var server = http.createServer("127.0.0.1", 5000);
+
+server.listen(function(req) {
+   console.log(req);
 });
 
 
