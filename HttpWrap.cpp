@@ -5,13 +5,6 @@
 
 using namespace v8;
 
-#define RESPONSE \
-  "HTTP/1.1 200 OK\r\n" \
-  "Content-Type: text/plain\r\n" \
-  "Content-Length: 12\r\n" \
-  "\r\n" \
-  "hello world\n"
-
 HttpWrap::HttpWrap(Handle<Context> context, const Arguments& args)
 {
    Local<ObjectTemplate> serverTemplate = ObjectTemplate::New();
@@ -76,17 +69,17 @@ void HttpWrap::OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
    
    Local<Value> response = httpWrap->callback->Call(Context::GetCurrent()->Global(), 1, argv);
    
+   String::AsciiValue data(response->ToString());
+   
    uv_buf_t resbuf;
-   resbuf.base = RESPONSE;
-   resbuf.len = sizeof(RESPONSE);
+   resbuf.base = *data;
+   resbuf.len = data.length();
+
    uv_write_t writeType;
 
    uv_write(&writeType, server, &resbuf, 1, 0);
+   
+   uv_close((uv_handle_t *) server, 0);
 
    free(buf.base);
 }
-
-void HttpWrap::OnClose(uv_handle_t* handle)
-{
-
-}  

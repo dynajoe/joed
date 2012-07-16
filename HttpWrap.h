@@ -21,6 +21,5 @@ class HttpWrap
       static void OnConnection(uv_stream_t* handle, int status);
       static uv_buf_t AllocConnection(uv_handle_t* handle, size_t suggested_size);
       static void OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf);
-      static void OnClose(uv_handle_t* handle);
 };
 #endif
