@@ -3,6 +3,15 @@
 #include "v8/include/v8.h"
 #include "libuv/include/uv.h"
 
+typedef struct 
+{
+   HttpWrap* wrapper;
+   uv_tcp_t handle;
+   char* data;
+   int max;
+   int length;
+} Client;
+
 using namespace v8;
 
 HttpWrap::HttpWrap(Handle<Context> context, const Arguments& args)
@@ -14,7 +23,7 @@ HttpWrap::HttpWrap(Handle<Context> context, const Arguments& args)
    Local<Object> localServer = serverTemplate->NewInstance();
    localServer->SetInternalField(0, External::New(this));
 
-   String::AsciiValue ip_address(args[0]);
+   String::Utf8Value ip_address(args[0]);
    int port = args[1]->Int32Value();
 
    handle = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
@@ -47,11 +56,15 @@ Handle<Value> HttpWrap::Listen(const Arguments& args)
 
 void HttpWrap::OnConnection(uv_stream_t* handle, int status)
 {
-   uv_tcp_t* client = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
-   uv_tcp_init(uv_default_loop(), client);
-   client->data = handle->data;
-   uv_accept(handle, (uv_stream_t*) client);
-   uv_read_start((uv_stream_t*) client, AllocConnection, OnRead);
+   Client* client = (Client*) malloc(sizeof(Client));
+   uv_tcp_init(uv_default_loop(), &client->handle);
+   client->max = 0;
+   client->length = 0;
+   client->wrapper = (HttpWrap*) handle->data;
+   client->handle.data = client;
+
+   uv_accept(handle, (uv_stream_t*) &client->handle);
+   uv_read_start((uv_stream_t*) &client->handle, AllocConnection, OnRead);
 }
 
 uv_buf_t HttpWrap::AllocConnection(uv_handle_t* handle, size_t suggested_size)
@@ -59,27 +72,72 @@ uv_buf_t HttpWrap::AllocConnection(uv_handle_t* handle, size_t suggested_size)
    return uv_buf_init((char*) malloc(suggested_size), suggested_size);
 }
 
+void OnClose(uv_handle_t* handle)
+{
+
+}
+
 void HttpWrap::OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
 {
+   Client* client = (Client*) server->data;
+
+   if (nread < 0)
+   {
+      if (buf.base) 
+      {
+         free(buf.base);
+      }
+
+      if (uv_last_error(uv_default_loop()).code == UV_EOF)
+      {
+         write(1, client->data, client->length); 
+         uv_close((uv_handle_t*) server, OnClose);
+      }
+
+      return;
+   }
+
+   if (nread == 0)
+   {
+      free(buf.base);
+      return;
+   }
+
    HandleScope scope;
+   HttpWrap* httpWrap = static_cast<HttpWrap*>(client->wrapper);
+   
+   int offset = 0;
 
-   HttpWrap* httpWrap = static_cast<HttpWrap*>(server->data);
-   Local<Value>* argv = new Local<Value>[1];
-   argv[0] = String::New(buf.base);
-   
-   Local<Value> response = httpWrap->callback->Call(Context::GetCurrent()->Global(), 1, argv);
-   
-   String::AsciiValue data(response->ToString());
-   
-   uv_buf_t resbuf;
-   resbuf.base = *data;
-   resbuf.len = data.length();
+   if (client->max == 0)
+   {
+      client->data = (char*) malloc(nread);   
+      client->length = nread;
+      client->max = nread;
+   }
+   else if (client->length + nread > client->max)
+   {
+      int newMax = client->max * 2 + nread;
+      char* newBuffer = (char*) malloc(newMax);
 
-   uv_write_t writeType;
+      for (int i = 0; i < client->length; i++)
+      {
+         newBuffer[i] = client->data[i];
+      }
 
-   uv_write(&writeType, server, &resbuf, 1, 0);
-   
-   uv_close((uv_handle_t *) server, 0);
+      offset = client->length;
+      client->data = newBuffer;
+      client->max = newMax;
+      client->length = client->length + nread;
+   }
+   else
+   {
+      offset = client->length;
+   }
+
+   for (int i = 0; i < nread; i++)
+   {
+      client->data[offset + i] = buf.base[i];
+   }
 
    free(buf.base);
 }
