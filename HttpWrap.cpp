@@ -12,6 +12,11 @@ typedef struct
    int length;
 } Client;
 
+bool isAtCR = false;
+
+const char CR = '\r';
+const char LF = '\n';
+
 using namespace v8;
 
 HttpWrap::HttpWrap(Handle<Context> context, const Arguments& args)
@@ -136,6 +141,25 @@ void HttpWrap::OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
 
    for (int i = 0; i < nread; i++)
    {
+      if (buf.base[i] == CR)
+      {
+         if (isAtCR)
+         {
+            //We've reached end of headers?
+            //Close connection and return
+            uv_close((uv_handle_t*) &client->handle, OnClose);
+            free(buf.base);
+            isAtCR = false;
+            return;
+         }
+         
+         isAtCR = true;
+      }
+      else if (buf.base[i] != LF) 
+      { 
+         isAtCR = false; 
+      }
+
       client->data[offset + i] = buf.base[i];
    }
 
