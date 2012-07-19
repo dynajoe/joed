@@ -2,6 +2,14 @@
 #include <cstdlib>
 #include "v8/include/v8.h"
 #include "libuv/include/uv.h"
+#include <string.h>
+
+bool isAtCR = false;
+
+const char CR = '\r';
+const char LF = '\n';
+
+using namespace v8;
 
 typedef struct 
 {
@@ -10,14 +18,8 @@ typedef struct
    char* data;
    int max;
    int length;
+   bool isAtCR;
 } Client;
-
-bool isAtCR = false;
-
-const char CR = '\r';
-const char LF = '\n';
-
-using namespace v8;
 
 HttpWrap::HttpWrap(Handle<Context> context, const Arguments& args)
 {
@@ -63,6 +65,7 @@ void HttpWrap::OnConnection(uv_stream_t* handle, int status)
 {
    Client* client = (Client*) malloc(sizeof(Client));
    uv_tcp_init(uv_default_loop(), &client->handle);
+
    client->max = 0;
    client->length = 0;
    client->wrapper = (HttpWrap*) handle->data;
@@ -77,14 +80,87 @@ uv_buf_t HttpWrap::AllocConnection(uv_handle_t* handle, size_t suggested_size)
    return uv_buf_init((char*) malloc(suggested_size), suggested_size);
 }
 
-void OnClose(uv_handle_t* handle)
+uv_buf_t GetResponse(Client* client)
 {
+   HandleScope scope;
 
+   Handle<Value> argv[1] = { String::New(client->data, client->length) };
+
+   Local<Value> response = client->wrapper->callback->Call(
+      Context::GetCurrent()->Global(), 1, argv);
+
+   String::Utf8Value data(response->ToString());
+
+   uv_buf_t resbuf = uv_buf_init((char*) malloc(data.length()), data.length());
+   
+   memcpy(resbuf.base, *data, data.length());
+
+   return resbuf;
+}
+
+void ProcessData(Client* client, uv_stream_t* server, ssize_t nread, uv_buf_t buf)
+{
+   int offset = 0;
+
+   if (client->max == 0)
+   {
+      client->data = (char*) malloc(nread);   
+      client->max = nread;
+   }
+   else if (client->length + nread > client->max)
+   {
+      int newMax = client->max * 2 + nread;
+      char* newBuffer = (char*) malloc(newMax);
+      memcpy(newBuffer, buf.base, nread);
+      
+      offset = client->length;
+      client->data = newBuffer;
+      client->max = newMax;
+   }
+   else
+   {
+      offset = client->length;
+   }
+   
+   bool headersComplete = false;
+
+   for (int i = 0; i < nread; i++)
+   {
+      char current = buf.base[i];
+
+      client->data[client->length++] = current;
+
+      if (current == CR && client->isAtCR)
+      {
+         headersComplete = true;
+         break;
+      }
+
+      if (current == CR) 
+      {
+         client->isAtCR = true;
+      }
+      else if (buf.base[i] != LF) 
+      { 
+         client->isAtCR = false; 
+      }
+   }
+
+   if (headersComplete)
+   {
+      uv_buf_t resbuf = GetResponse(client);
+
+      uv_write_t writeType;
+
+      uv_write(&writeType, (uv_stream_t*) &client->handle, &resbuf, 1, 0); 
+
+      //uv_close((uv_handle_t*) server, HttpWrap::OnClose);
+   }
 }
 
 void HttpWrap::OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
 {
-   Client* client = (Client*) server->data;
+   puts("onread");
 
    if (nread < 0)
    {
@@ -94,74 +170,27 @@ void HttpWrap::OnRead(uv_stream_t* server, ssize_t nread, uv_buf_t buf)
       }
 
       if (uv_last_error(uv_default_loop()).code == UV_EOF)
-      {
-         write(1, client->data, client->length); 
+      { 
          uv_close((uv_handle_t*) server, OnClose);
       }
 
       return;
    }
 
-   if (nread == 0)
+   if (nread > 0)
    {
-      free(buf.base);
-      return;
+      ProcessData((Client*) server->data, server, nread, buf);
+      puts("Processed data");
    }
 
-   HandleScope scope;
-   HttpWrap* httpWrap = static_cast<HttpWrap*>(client->wrapper);
-   
-   int offset = 0;
-
-   if (client->max == 0)
-   {
-      client->data = (char*) malloc(nread);   
-      client->length = nread;
-      client->max = nread;
-   }
-   else if (client->length + nread > client->max)
-   {
-      int newMax = client->max * 2 + nread;
-      char* newBuffer = (char*) malloc(newMax);
-
-      for (int i = 0; i < client->length; i++)
-      {
-         newBuffer[i] = client->data[i];
-      }
-
-      offset = client->length;
-      client->data = newBuffer;
-      client->max = newMax;
-      client->length = client->length + nread;
-   }
-   else
-   {
-      offset = client->length;
-   }
-
-   for (int i = 0; i < nread; i++)
-   {
-      if (buf.base[i] == CR)
-      {
-         if (isAtCR)
-         {
-            //We've reached end of headers?
-            //Close connection and return
-            uv_close((uv_handle_t*) &client->handle, OnClose);
-            free(buf.base);
-            isAtCR = false;
-            return;
-         }
-         
-         isAtCR = true;
-      }
-      else if (buf.base[i] != LF) 
-      { 
-         isAtCR = false; 
-      }
-
-      client->data[offset + i] = buf.base[i];
-   }
-
+   puts("freeing at end");
    free(buf.base);
+}
+
+void HttpWrap::OnClose(uv_handle_t* handle)
+{
+   puts ("onclose");
+   //Client* client = (Client*) handle->data;
+   puts("after client");
+ //  free(client->data);
 }
